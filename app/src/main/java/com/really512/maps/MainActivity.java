@@ -24,7 +24,7 @@ import org.osmdroid.util.GeoPoint;
 public class MainActivity extends Activity implements LocationListener {
     private MapView map; private LocationManager lm; private TextToSpeech tts;
     private boolean nav=false; private boolean settingDestination=false; private float touchDownX,touchDownY; private GeoPoint destination; private Marker marker; private Polyline routeLine;
-    private TextView status; private long lastVoice=0; private android.content.SharedPreferences navPrefs; private Location lastLocation; private Handler mainHandler=new Handler(); private boolean routeRequestRunning=false; private java.util.List<GeoPoint> roadRoute=new java.util.ArrayList<>(); private int nextRoutePoint=0; private JSONArray routeSteps; private double routeMeters=0; private long lastRouteRefresh=0;
+    private TextView status; private long lastVoice=0; private android.content.SharedPreferences navPrefs; private Location lastLocation; private Handler mainHandler=new Handler(); private boolean routeRequestRunning=false; private int currentStepIndex=0; private double lastStepDistance=Double.MAX_VALUE; private java.util.List<GeoPoint> roadRoute=new java.util.ArrayList<>(); private int nextRoutePoint=0; private JSONArray routeSteps; private double routeMeters=0; private long lastRouteRefresh=0;
 
     @Override public void onCreate(Bundle b){super.onCreate(b);
         Configuration.getInstance().load(this,getSharedPreferences("maps",0)); Configuration.getInstance().setUserAgentValue(getPackageName());
@@ -62,7 +62,7 @@ public class MainActivity extends Activity implements LocationListener {
                 String instruction="Следуйте по маршруту";
                 if(steps.length()>0) instruction=steps.getJSONObject(0).optString("name","Следуйте по маршруту");
                 mainHandler.post(() -> {
-                    roadRoute=pts; nextRoutePoint=0; routeSteps=steps; routeMeters=meters; drawRoadRoute(pts);
+                    roadRoute=pts; nextRoutePoint=0; routeSteps=steps; currentStepIndex=0; lastStepDistance=Double.MAX_VALUE; routeMeters=meters; drawRoadRoute(pts);
                     if(navPrefs!=null) navPrefs.edit().putFloat("route_distance_m",(float)meters).putString("next_instruction",instruction).putFloat("next_step_distance_m",(float)meters).apply();
                     status.setText("🛣️ Маршрут построен • "+formatDistance((float)meters));
                 });
@@ -74,14 +74,17 @@ public class MainActivity extends Activity implements LocationListener {
     private void updateTurnGuidance(Location l){
         if(routeSteps==null || routeSteps.length()==0 || !nav) return;
         try {
-            int best=-1; double bestDist=Double.MAX_VALUE;
-            for(int i=0;i<routeSteps.length();i++){
-                JSONObject s=routeSteps.getJSONObject(i);
-                JSONArray loc=s.getJSONObject("maneuver").getJSONArray("location");
-                float d=l.distanceTo(toLocation(new GeoPoint(loc.getDouble(1),loc.getDouble(0))));
-                if(d<bestDist){bestDist=d; best=i;}
+            if(currentStepIndex >= routeSteps.length()) return;
+            JSONObject current=routeSteps.getJSONObject(currentStepIndex);
+            JSONArray currentLoc=current.getJSONObject("maneuver").getJSONArray("location");
+            float currentDist=l.distanceTo(toLocation(new GeoPoint(currentLoc.getDouble(1),currentLoc.getDouble(0))));
+            if(currentDist < 35 && currentStepIndex < routeSteps.length()-1){
+                currentStepIndex++;
             }
-            JSONObject step=routeSteps.getJSONObject(best);
+            JSONObject step=routeSteps.getJSONObject(currentStepIndex);
+            JSONArray stepLoc=step.getJSONObject("maneuver").getJSONArray("location");
+            float bestDist=l.distanceTo(toLocation(new GeoPoint(stepLoc.getDouble(1),stepLoc.getDouble(0))));
+            lastStepDistance=bestDist;
             String type=step.getJSONObject("maneuver").optString("type","");
             String mod=step.getJSONObject("maneuver").optString("modifier","");
             String road=step.optString("name","");
