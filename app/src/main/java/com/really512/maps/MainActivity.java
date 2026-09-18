@@ -24,7 +24,7 @@ import org.osmdroid.util.GeoPoint;
 public class MainActivity extends Activity implements LocationListener {
     private MapView map; private LocationManager lm; private TextToSpeech tts;
     private boolean nav=false; private GeoPoint destination; private Marker marker; private Polyline routeLine;
-    private TextView status; private long lastVoice=0; private android.content.SharedPreferences navPrefs; private Location lastLocation; private Handler mainHandler=new Handler(); private java.util.List<GeoPoint> roadRoute=new java.util.ArrayList<>(); private int nextRoutePoint=0;
+    private TextView status; private long lastVoice=0; private android.content.SharedPreferences navPrefs; private Location lastLocation; private Handler mainHandler=new Handler(); private java.util.List<GeoPoint> roadRoute=new java.util.ArrayList<>(); private int nextRoutePoint=0; private JSONArray routeSteps; private double routeMeters=0; private long lastRouteRefresh=0;
 
     @Override public void onCreate(Bundle b){super.onCreate(b);
         Configuration.getInstance().load(this,getSharedPreferences("maps",0)); Configuration.getInstance().setUserAgentValue(getPackageName());
@@ -42,7 +42,7 @@ public class MainActivity extends Activity implements LocationListener {
         new AlertDialog.Builder(this).setTitle("🛣️ Маршрут").setMessage("Маршрут рассчитан от текущего местоположения до выбранной точки.\n\nНавигатор будет отслеживать движение и давать голосовые подсказки.").setPositiveButton("Включить навигатор",(d,w)->toggleNav(true)).setNegativeButton("Закрыть",null).show();}
     private void toggleNav(boolean on){nav=on; if(navPrefs!=null) navPrefs.edit().putBoolean("navigation_enabled",on).apply();status.setText(nav?"🔊 Навигатор ВКЛ • голосовые подсказки": "🔇 Навигатор ВЫКЛ • маршрут остаётся на карте");if(nav)speak("Навигатор включён");}
     private void startLocation(){lm=(LocationManager)getSystemService(LOCATION_SERVICE);if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION},10);return;}try{lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,3,this);}catch(Exception ignored){}}
-    @Override public void onLocationChanged(Location l){lastLocation=l; if(destination==null)return; if(routeLine==null) requestRoadRoute(new GeoPoint(l.getLatitude(),l.getLongitude()),destination);float m=l.distanceTo(toLocation(destination)); if(navPrefs!=null) navPrefs.edit().putFloat("destination_distance_m",m).apply(); status.setText(nav?"🔊 До цели: "+formatDistance(m):"📍 До цели: "+formatDistance(m));if(nav){if(m<50){speak("Вы прибыли в пункт назначения");nav=false;}else if(System.currentTimeMillis()-lastVoice>15000 && m<2000){speak("До пункта назначения "+formatDistance(m));lastVoice=System.currentTimeMillis();}}}
+    @Override public void onLocationChanged(Location l){lastLocation=l; if(destination==null)return; if(routeLine==null) requestRoadRoute(new GeoPoint(l.getLatitude(),l.getLongitude()),destination);float m=l.distanceTo(toLocation(destination)); updateTurnGuidance(l); if(navPrefs!=null) navPrefs.edit().putFloat("destination_distance_m",m).apply(); status.setText(nav?"🔊 До цели: "+formatDistance(m):"📍 До цели: "+formatDistance(m));if(nav){if(m<50){speak("Вы прибыли в пункт назначения");nav=false;}else if(System.currentTimeMillis()-lastVoice>15000 && m<2000){speak("До пункта назначения "+formatDistance(m));lastVoice=System.currentTimeMillis();}}}
     private void requestRoadRoute(final GeoPoint from, final GeoPoint to){
         status.setText("🛣️ Строим маршрут по дорогам…");
         new Thread(() -> {
@@ -62,7 +62,7 @@ public class MainActivity extends Activity implements LocationListener {
                 String instruction="Следуйте по маршруту";
                 if(steps.length()>0) instruction=steps.getJSONObject(0).optString("name","Следуйте по маршруту");
                 mainHandler.post(() -> {
-                    roadRoute=pts; nextRoutePoint=0; drawRoadRoute(pts);
+                    roadRoute=pts; nextRoutePoint=0; routeSteps=steps; routeMeters=meters; drawRoadRoute(pts);
                     if(navPrefs!=null) navPrefs.edit().putFloat("route_distance_m",(float)meters).putString("next_instruction",instruction).putFloat("next_step_distance_m",(float)meters).apply();
                     status.setText("🛣️ Маршрут построен • "+formatDistance((float)meters));
                 });
@@ -70,6 +70,30 @@ public class MainActivity extends Activity implements LocationListener {
                 mainHandler.post(() -> { drawRoute(from,to); status.setText("⚠️ Не удалось получить дорожный маршрут"); });
             }
         }).start();
+    }
+    private void updateTurnGuidance(Location l){
+        if(routeSteps==null || routeSteps.length()==0 || !nav) return;
+        try {
+            int best=-1; double bestDist=Double.MAX_VALUE;
+            for(int i=0;i<routeSteps.length();i++){
+                JSONObject s=routeSteps.getJSONObject(i);
+                JSONArray loc=s.getJSONObject("maneuver").getJSONArray("location");
+                float d=l.distanceTo(toLocation(new GeoPoint(loc.getDouble(1),loc.getDouble(0))));
+                if(d<bestDist){bestDist=d; best=i;}
+            }
+            JSONObject step=routeSteps.getJSONObject(best);
+            String type=step.getJSONObject("maneuver").optString("type","");
+            String mod=step.getJSONObject("maneuver").optString("modifier","");
+            String road=step.optString("name","");
+            String action="Продолжайте движение";
+            if("turn".equals(type)) action="Поверните "+(mod.length()>0?mod:"на следующую дорогу");
+            else if("roundabout".equals(type)) action="На круговом движении";
+            else if("arrive".equals(type)) action="Вы прибыли в пункт назначения";
+            float d=(float)bestDist;
+            String text=action+(road.length()>0?" на "+road:"");
+            if(navPrefs!=null) navPrefs.edit().putString("next_instruction",text).putFloat("next_step_distance_m",d).apply();
+            if(d<120 && System.currentTimeMillis()-lastVoice>12000 && !"arrive".equals(type)){ speak("Через "+formatDistance(d)+": "+text); lastVoice=System.currentTimeMillis(); }
+        } catch(Exception ignored){}
     }
     private void drawRoadRoute(java.util.List<GeoPoint> pts){
         if(routeLine!=null) map.getOverlays().remove(routeLine);
