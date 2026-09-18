@@ -2,11 +2,16 @@ package com.really512.maps;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.pm.PackageManager;
 import android.location.*;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.view.View;
+import android.view.MotionEvent;
 import android.widget.*;
 import android.os.Handler;
 import org.json.JSONArray;
@@ -28,14 +33,55 @@ public class MainActivity extends Activity implements LocationListener {
 
     @Override public void onCreate(Bundle b){super.onCreate(b);
         Configuration.getInstance().load(this,getSharedPreferences("maps",0)); Configuration.getInstance().setUserAgentValue(getPackageName());
-        LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20,0));
-        root.addView(map,new LinearLayout.LayoutParams(-1,0,1));
-        status=new TextView(this); status.setText("🗺️ Нажмите на место, чтобы построить маршрут"); status.setGravity(Gravity.CENTER); status.setTextSize(16); status.setPadding(12,12,12,12); root.addView(status);
+
+        FrameLayout root=new FrameLayout(this);
+        map=new MapView(this);
+        map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true);
+        map.setMinZoomLevel(2); map.setMaxZoomLevel(20);
+        map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20,0));
+        root.addView(map,new FrameLayout.LayoutParams(-1,-1));
+
+        LinearLayout top=new LinearLayout(this); top.setPadding(18,18,18,0);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView search=new TextView(this); search.setText("⌕   Поиск мест и адресов                 🎙");
+        search.setTextColor(Color.WHITE); search.setTextSize(15); search.setGravity(Gravity.CENTER_VERTICAL); search.setPadding(18,0,14,0);
+        search.setBackground(roundBg(0xE91A2A3A,22));
+        top.addView(search,new LinearLayout.LayoutParams(-1,56));
+        FrameLayout.LayoutParams topLp=new FrameLayout.LayoutParams(-1,56,Gravity.TOP); topLp.setMargins(0,12,0,0); root.addView(top,topLp);
+
+        LinearLayout controls=new LinearLayout(this); controls.setOrientation(LinearLayout.VERTICAL); controls.setGravity(Gravity.CENTER);
+        TextView plus=mapButton("+"), minus=mapButton("−"), locate=mapButton("➤");
+        controls.addView(plus,new LinearLayout.LayoutParams(52,52)); controls.addView(minus,new LinearLayout.LayoutParams(52,52));
+        LinearLayout.LayoutParams locLp=new LinearLayout.LayoutParams(52,52); locLp.topMargin=10; controls.addView(locate,locLp);
+        plus.setOnClickListener(v->map.getController().zoomIn()); minus.setOnClickListener(v->map.getController().zoomOut());
+        locate.setOnClickListener(v->{if(lastLocation!=null) map.getController().animateTo(new GeoPoint(lastLocation.getLatitude(),lastLocation.getLongitude()));});
+        FrameLayout.LayoutParams ctlLp=new FrameLayout.LayoutParams(60,170,Gravity.RIGHT|Gravity.CENTER_VERTICAL); ctlLp.setMargins(0,0,10,0); root.addView(controls,ctlLp);
+
+        status=new TextView(this); status.setText("🗺️  Нажмите на место, чтобы построить маршрут");
+        status.setTextColor(Color.WHITE); status.setTextSize(14); status.setGravity(Gravity.CENTER_VERTICAL); status.setPadding(18,0,18,0);
+        status.setBackground(roundBg(0xE9152230,18));
+        FrameLayout.LayoutParams statusLp=new FrameLayout.LayoutParams(-1,58,Gravity.BOTTOM); statusLp.setMargins(14,0,14,76); root.addView(status,statusLp);
+
+        LinearLayout bottom=new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(6,5,6,5);
+        bottom.setBackground(roundBg(0xF30B1622,18));
+        String[] tabs={"▣\\nКарта","➤\\nНавигатор","☆\\nЗакладки","☰\\nЕщё"};
+        for(String label:tabs){TextView t=new TextView(this); t.setText(label); t.setTextColor(Color.LTGRAY); t.setTextSize(12); t.setGravity(Gravity.CENTER); bottom.addView(t,new LinearLayout.LayoutParams(0,62,1));}
+        ((TextView)bottom.getChildAt(0)).setTextColor(0xFF18A8FF);
+        FrameLayout.LayoutParams bottomLp=new FrameLayout.LayoutParams(-1,68,Gravity.BOTTOM); bottomLp.setMargins(10,0,10,6); root.addView(bottom,bottomLp);
+
         setContentView(root); navPrefs=getSharedPreferences("maps_navigation",MODE_PRIVATE);
         tts=new TextToSpeech(this,s->{if(s==TextToSpeech.SUCCESS)tts.setLanguage(new Locale("ru","RU"));});
-        map.setOnTouchListener((v,e)->{ if(e.getAction()==1 && Math.abs(e.getX()-touchDownX)<12 && Math.abs(e.getY()-touchDownY)<12){ GeoPoint p=(GeoPoint)map.getProjection().fromPixels((int)e.getX(),(int)e.getY());selectDestination(p);} if(e.getAction()==0){touchDownX=e.getX();touchDownY=e.getY();} return false;}); startLocation();
+        map.setOnTouchListener((v,e)->{
+            if(e.getAction()==MotionEvent.ACTION_UP && Math.abs(e.getX()-touchDownX)<12 && Math.abs(e.getY()-touchDownY)<12){
+                GeoPoint p=(GeoPoint)map.getProjection().fromPixels((int)e.getX(),(int)e.getY()); selectDestination(p);
+            }
+            if(e.getAction()==MotionEvent.ACTION_DOWN){touchDownX=e.getX();touchDownY=e.getY();}
+            return false;
+        });
+        startLocation();
     }
+    private GradientDrawable roundBg(int color,int radius){GradientDrawable g=new GradientDrawable();g.setColor(color);g.setCornerRadius(radius);return g;}
+    private TextView mapButton(String text){TextView v=new TextView(this);v.setText(text);v.setTextColor(Color.WHITE);v.setTextSize(22);v.setGravity(Gravity.CENTER);v.setBackground(roundBg(0xE91A2A3A,18));return v;}
     private void selectDestination(GeoPoint p){destination=p;if(marker!=null)map.getOverlays().remove(marker);marker=new Marker(map);marker.setPosition(p);marker.setTitle("Место назначения");map.getOverlays().add(marker);map.invalidate();
         new AlertDialog.Builder(this).setTitle("📍 Место назначения").setMessage("Координаты: "+String.format(Locale.US,"%.5f, %.5f",p.getLatitude(),p.getLongitude())).setPositiveButton("Маршрут",(d,w)->showRoute()).setNegativeButton("Отмена",null).show();}
     private void showRoute(){ if(destination!=null){ if(lastLocation!=null) requestRoadRoute(new GeoPoint(lastLocation.getLatitude(),lastLocation.getLongitude()),destination); navPrefs.edit().putFloat("destination_lat",(float)destination.getLatitude()).putFloat("destination_lon",(float)destination.getLongitude()).putString("destination_title","Место назначения").apply(); } status.setText("🛣️ Маршрут готов • Нажмите «Включить навигатор»");
