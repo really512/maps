@@ -1,11 +1,12 @@
 package com.really512.maps;
 
+import android.content.Intent;
+import androidx.annotation.NonNull;
 import androidx.car.app.Screen;
 import androidx.car.app.Session;
-import androidx.car.app.CarContext;
 
 public class MapsCarSession extends Session {
-    @Override public Screen onCreateScreen(Intent intent) {
+    @NonNull @Override public Screen onCreateScreen(@NonNull Intent intent) {
         return new MapsCarScreen(getCarContext());
     }
 }
