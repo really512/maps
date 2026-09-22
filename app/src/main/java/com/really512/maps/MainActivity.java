@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.location.*;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
@@ -31,6 +33,7 @@ public class MainActivity extends Activity implements LocationListener {
     private boolean nav=false; private float touchDownX,touchDownY; private GeoPoint destination; private Marker marker; private Polyline routeLine;
     private TextView status; private long lastVoice=0; private android.content.SharedPreferences navPrefs; private Location lastLocation; private Handler mainHandler=new Handler(); private boolean routeRequestRunning=false; private int currentStepIndex=0; private double lastStepDistance=Double.MAX_VALUE; private java.util.List<GeoPoint> roadRoute=new java.util.ArrayList<>(); private int nextRoutePoint=0; private JSONArray routeSteps; private double routeMeters=0;
     private final ArrayList<SearchResult> searchResults=new ArrayList<>();
+    private boolean offlineMode=false;
 
     private static class SearchResult {
         String name,address; double lat,lon;
@@ -41,7 +44,7 @@ public class MainActivity extends Activity implements LocationListener {
     @Override public void onCreate(Bundle b){super.onCreate(b);
         Configuration.getInstance().load(this,getSharedPreferences("maps",0)); Configuration.getInstance().setUserAgentValue(getPackageName());
         FrameLayout root=new FrameLayout(this);
-        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20,0)); root.addView(map,new FrameLayout.LayoutParams(-1,-1));
+        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); updateOfflineMapMode(); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20,0)); root.addView(map,new FrameLayout.LayoutParams(-1,-1));
 
         LinearLayout top=new LinearLayout(this); top.setPadding(18,18,18,0); top.setGravity(Gravity.CENTER_VERTICAL);
         TextView search=new TextView(this); search.setText("⌕   Поиск мест и адресов                 🎙"); search.setTextColor(Color.WHITE); search.setTextSize(15); search.setGravity(Gravity.CENTER_VERTICAL); search.setPadding(18,0,14,0); search.setBackground(roundBg(0xE91A2A3A,22)); top.addView(search,new LinearLayout.LayoutParams(-1,56));
@@ -57,7 +60,7 @@ public class MainActivity extends Activity implements LocationListener {
 
         LinearLayout bottom=new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(6,5,6,5); bottom.setBackground(roundBg(0xF30B1622,18)); String[] tabs={"▣\nКарта","➤\nНавигатор","☆\nЗакладки","☰\nЕщё"}; for(String label:tabs){TextView t=new TextView(this);t.setText(label);t.setTextColor(Color.LTGRAY);t.setTextSize(12);t.setGravity(Gravity.CENTER);bottom.addView(t,new LinearLayout.LayoutParams(0,62,1));} ((TextView)bottom.getChildAt(0)).setTextColor(0xFF18A8FF); FrameLayout.LayoutParams bottomLp=new FrameLayout.LayoutParams(-1,68,Gravity.BOTTOM); bottomLp.setMargins(10,0,10,6); root.addView(bottom,bottomLp);
 
-        setContentView(root); navPrefs=getSharedPreferences("maps_navigation",MODE_PRIVATE);
+        setContentView(root); navPrefs=getSharedPreferences("maps_navigation",MODE_PRIVATE); loadCachedRoute();
         tts=new TextToSpeech(this,s->{if(s==TextToSpeech.SUCCESS)tts.setLanguage(new Locale("ru","RU"));});
         map.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_UP&&Math.abs(e.getX()-touchDownX)<12&&Math.abs(e.getY()-touchDownY)<12){GeoPoint p=(GeoPoint)map.getProjection().fromPixels((int)e.getX(),(int)e.getY());selectDestination(p);}if(e.getAction()==MotionEvent.ACTION_DOWN){touchDownX=e.getX();touchDownY=e.getY();}return false;});
         startLocation();
@@ -73,6 +76,7 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void searchPlaces(String query){
+        if(!isOnline()){status.setText("📴 Поиск адресов недоступен без интернета. Сохранённый маршрут работает офлайн.");return;}
         status.setText("🔎 Ищем: "+query);
         new Thread(()->{
             try{
@@ -114,7 +118,62 @@ public class MainActivity extends Activity implements LocationListener {
     private void toggleNav(boolean on){nav=on;if(navPrefs!=null)navPrefs.edit().putBoolean("navigation_enabled",on).apply();status.setText(nav?"🔊 Навигатор ВКЛ • голосовые подсказки":"🔇 Навигатор ВЫКЛ • маршрут остаётся на карте");if(nav)speak("Навигатор включён");}
     private void startLocation(){lm=(LocationManager)getSystemService(LOCATION_SERVICE);if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION},10);return;}try{lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,3,this);}catch(Exception ignored){}}
     @Override public void onLocationChanged(Location l){lastLocation=l;if(destination==null)return;if(routeLine==null&&!routeRequestRunning)requestRoadRoute(new GeoPoint(l.getLatitude(),l.getLongitude()),destination);float m=l.distanceTo(toLocation(destination));updateTurnGuidance(l);if(navPrefs!=null)navPrefs.edit().putFloat("destination_distance_m",m).apply();status.setText(nav?"🔊 До цели: "+formatDistance(m):"📍 До цели: "+formatDistance(m));if(nav){if(m<50){speak("Вы прибыли в пункт назначения");nav=false;if(navPrefs!=null)navPrefs.edit().putBoolean("navigation_enabled",false).apply();}else if(System.currentTimeMillis()-lastVoice>15000&&m<2000){speak("До пункта назначения "+formatDistance(m));lastVoice=System.currentTimeMillis();}}}
-    private void requestRoadRoute(final GeoPoint from,final GeoPoint to){if(routeRequestRunning)return;routeRequestRunning=true;status.setText("🛣️ Строим маршрут по дорогам…");new Thread(()->{try{String u="https://router.project-osrm.org/route/v1/driving/"+from.getLongitude()+","+from.getLatitude()+";"+to.getLongitude()+","+to.getLatitude()+"?overview=full&geometries=geojson&steps=true";HttpURLConnection h=(HttpURLConnection)new URL(u).openConnection();h.setConnectTimeout(10000);h.setReadTimeout(15000);h.setRequestMethod("GET");java.io.BufferedReader br=new java.io.BufferedReader(new java.io.InputStreamReader(h.getInputStream()));StringBuilder sb=new StringBuilder();String line;while((line=br.readLine())!=null)sb.append(line);br.close();JSONObject root=new JSONObject(sb.toString());JSONArray routes=root.getJSONArray("routes");if(routes.length()==0)throw new Exception("route not found");JSONObject route=routes.getJSONObject(0);JSONObject geo=route.getJSONObject("geometry");JSONArray coords=geo.getJSONArray("coordinates");java.util.ArrayList<GeoPoint> pts=new java.util.ArrayList<>();for(int i=0;i<coords.length();i++){JSONArray q=coords.getJSONArray(i);pts.add(new GeoPoint(q.getDouble(1),q.getDouble(0)));}double meters=route.getDouble("distance");JSONArray legs=route.getJSONArray("legs");JSONArray steps=legs.getJSONObject(0).getJSONArray("steps");String instruction="Следуйте по маршруту";if(steps.length()>0)instruction=steps.getJSONObject(0).optString("name","Следуйте по маршруту");mainHandler.post(()->{routeRequestRunning=false;roadRoute=pts;nextRoutePoint=0;routeSteps=steps;currentStepIndex=0;lastStepDistance=Double.MAX_VALUE;routeMeters=meters;drawRoadRoute(pts);if(navPrefs!=null)navPrefs.edit().putFloat("route_distance_m",(float)meters).putString("next_instruction",instruction).putFloat("next_step_distance_m",(float)meters).apply();status.setText("🛣️ Маршрут построен • "+formatDistance((float)meters));});}catch(Exception e){mainHandler.post(()->{routeRequestRunning=false;drawRoute(from,to);status.setText("⚠️ Не удалось получить дорожный маршрут");});}}).start();}
+    private void requestRoadRoute(final GeoPoint from,final GeoPoint to){if(routeRequestRunning)return;
+        if(!isOnline()){
+            if(loadCachedRouteForDestination(to)) status.setText("📴 Интернет отключён • продолжаем по сохранённому маршруту");
+            else status.setText("📴 Нет интернета • сначала постройте этот маршрут онлайн");
+            return;
+        }
+        routeRequestRunning=true;status.setText("🛣️ Строим маршрут по дорогам…");new Thread(()->{try{String u="https://router.project-osrm.org/route/v1/driving/"+from.getLongitude()+","+from.getLatitude()+";"+to.getLongitude()+","+to.getLatitude()+"?overview=full&geometries=geojson&steps=true";HttpURLConnection h=(HttpURLConnection)new URL(u).openConnection();h.setConnectTimeout(10000);h.setReadTimeout(15000);h.setRequestMethod("GET");java.io.BufferedReader br=new java.io.BufferedReader(new java.io.InputStreamReader(h.getInputStream()));StringBuilder sb=new StringBuilder();String line;while((line=br.readLine())!=null)sb.append(line);br.close();JSONObject root=new JSONObject(sb.toString());JSONArray routes=root.getJSONArray("routes");if(routes.length()==0)throw new Exception("route not found");JSONObject route=routes.getJSONObject(0);JSONObject geo=route.getJSONObject("geometry");JSONArray coords=geo.getJSONArray("coordinates");java.util.ArrayList<GeoPoint> pts=new java.util.ArrayList<>();for(int i=0;i<coords.length();i++){JSONArray q=coords.getJSONArray(i);pts.add(new GeoPoint(q.getDouble(1),q.getDouble(0)));}double meters=route.getDouble("distance");JSONArray legs=route.getJSONArray("legs");JSONArray steps=legs.getJSONObject(0).getJSONArray("steps");String instruction="Следуйте по маршруту";if(steps.length()>0)instruction=steps.getJSONObject(0).optString("name","Следуйте по маршруту");mainHandler.post(()->{routeRequestRunning=false;roadRoute=pts;nextRoutePoint=0;routeSteps=steps;currentStepIndex=0;lastStepDistance=Double.MAX_VALUE;routeMeters=meters;drawRoadRoute(pts);saveCachedRoute(pts,steps,meters,to);if(navPrefs!=null)navPrefs.edit().putFloat("route_distance_m",(float)meters).putString("next_instruction",instruction).putFloat("next_step_distance_m",(float)meters).apply();status.setText("🛣️ Маршрут построен • "+formatDistance((float)meters));});}catch(Exception e){mainHandler.post(()->{routeRequestRunning=false;drawRoute(from,to);status.setText("⚠️ Не удалось получить дорожный маршрут");});}}).start();}
+    private boolean isOnline(){
+        try{
+            ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+            NetworkInfo ni=cm.getActiveNetworkInfo();
+            return ni!=null&&ni.isConnected();
+        }catch(Exception e){return false;}
+    }
+
+    private void updateOfflineMapMode(){
+        offlineMode=!isOnline();
+        if(map!=null)map.setUseDataConnection(!offlineMode);
+    }
+
+    private void saveCachedRoute(java.util.List<GeoPoint> pts, JSONArray steps, double meters, GeoPoint destinationPoint){
+        try{
+            JSONArray p=new JSONArray();
+            for(GeoPoint x:pts){JSONObject o=new JSONObject();o.put("lat",x.getLatitude());o.put("lon",x.getLongitude());p.put(o);}
+            navPrefs.edit().putString("cached_route_points",p.toString()).putString("cached_route_steps",steps.toString()).putFloat("cached_route_meters",(float)meters).putFloat("cached_dest_lat",(float)destinationPoint.getLatitude()).putFloat("cached_dest_lon",(float)destinationPoint.getLongitude()).apply();
+        }catch(Exception ignored){}
+    }
+
+    private void loadCachedRoute(){
+        if(navPrefs==null)return;
+        try{
+            String raw=navPrefs.getString("cached_route_points",null); if(raw==null)return;
+            JSONArray a=new JSONArray(raw); java.util.ArrayList<GeoPoint> pts=new java.util.ArrayList<>();
+            for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);pts.add(new GeoPoint(o.getDouble("lat"),o.getDouble("lon")));}
+            if(pts.size()<2)return;
+            roadRoute=pts; routeMeters=navPrefs.getFloat("cached_route_meters",0); drawRoadRoute(pts);
+            String s=navPrefs.getString("cached_route_steps",null); if(s!=null)routeSteps=new JSONArray(s);
+            float dlat=navPrefs.getFloat("cached_dest_lat",Float.NaN),dlon=navPrefs.getFloat("cached_dest_lon",Float.NaN);
+            if(!Float.isNaN(dlat)&&!Float.isNaN(dlon))destination=new GeoPoint(dlat,dlon);
+            status.setText("💾 Сохранённый маршрут готов для офлайн-режима");
+        }catch(Exception ignored){}
+    }
+
+    private boolean loadCachedRouteForDestination(GeoPoint wanted){
+        try{
+            String raw=navPrefs.getString("cached_route_points",null); if(raw==null)return false;
+            float dlat=navPrefs.getFloat("cached_dest_lat",Float.NaN),dlon=navPrefs.getFloat("cached_dest_lon",Float.NaN); if(Float.isNaN(dlat)||Float.isNaN(dlon))return false;
+            Location a=toLocation(new GeoPoint(dlat,dlon)),b=toLocation(wanted); if(a.distanceTo(b)>150)return false;
+            JSONArray arr=new JSONArray(raw); java.util.ArrayList<GeoPoint> pts=new java.util.ArrayList<>();
+            for(int i=0;i<arr.length();i++){JSONObject o=arr.getJSONObject(i);pts.add(new GeoPoint(o.getDouble("lat"),o.getDouble("lon")));}
+            if(pts.size()<2)return false;
+            roadRoute=pts; routeMeters=navPrefs.getFloat("cached_route_meters",0); String s=navPrefs.getString("cached_route_steps",null); routeSteps=s==null?null:new JSONArray(s);
+            currentStepIndex=0; lastStepDistance=Double.MAX_VALUE; drawRoadRoute(pts); return true;
+        }catch(Exception e){return false;}
+    }
+
     private void updateTurnGuidance(Location l){if(routeSteps==null||routeSteps.length()==0||!nav)return;try{if(currentStepIndex>=routeSteps.length())return;JSONObject current=routeSteps.getJSONObject(currentStepIndex);JSONArray currentLoc=current.getJSONObject("maneuver").getJSONArray("location");float currentDist=l.distanceTo(toLocation(new GeoPoint(currentLoc.getDouble(1),currentLoc.getDouble(0))));if(currentDist<35&&currentStepIndex<routeSteps.length()-1)currentStepIndex++;JSONObject step=routeSteps.getJSONObject(currentStepIndex);JSONArray stepLoc=step.getJSONObject("maneuver").getJSONArray("location");float bestDist=l.distanceTo(toLocation(new GeoPoint(stepLoc.getDouble(1),stepLoc.getDouble(0))));lastStepDistance=bestDist;String type=step.getJSONObject("maneuver").optString("type","");String mod=step.getJSONObject("maneuver").optString("modifier","");String road=step.optString("name","");String action="Продолжайте движение";if("turn".equals(type))action="Поверните "+(mod.length()>0?mod:"на следующую дорогу");else if("roundabout".equals(type))action="На круговом движении";else if("arrive".equals(type))action="Вы прибыли в пункт назначения";float d=bestDist;String text=action+(road.length()>0?" на "+road:"");if(navPrefs!=null)navPrefs.edit().putString("next_instruction",text).putFloat("next_step_distance_m",d).apply();if(d<120&&System.currentTimeMillis()-lastVoice>12000&&!"arrive".equals(type)){speak("Через "+formatDistance(d)+": "+text);lastVoice=System.currentTimeMillis();}}catch(Exception ignored){}}
     private void drawRoadRoute(java.util.List<GeoPoint> pts){if(routeLine!=null)map.getOverlays().remove(routeLine);routeLine=new Polyline(map);routeLine.setPoints(pts);map.getOverlays().add(routeLine);map.invalidate();}
     private void drawRoute(GeoPoint from,GeoPoint to){if(routeLine!=null)map.getOverlays().remove(routeLine);routeLine=new Polyline(map);java.util.List<GeoPoint> pts=new java.util.ArrayList<>();pts.add(from);pts.add(to);routeLine.setPoints(pts);map.getOverlays().add(routeLine);map.invalidate();if(navPrefs!=null)navPrefs.edit().putString("next_instruction","Следуйте к пункту назначения").putFloat("next_step_distance_m",from.distanceToAsDouble(to).floatValue()).apply();}
@@ -122,5 +181,5 @@ public class MainActivity extends Activity implements LocationListener {
     private String formatDistance(float m){return m>=1000?String.format(Locale.getDefault(),"%.1f км",m/1000f):Math.round(m)+" м";}
     private void speak(String s){if(nav&&tts!=null)tts.speak(s,TextToSpeech.QUEUE_FLUSH,null,"maps-navigation");}
     @Override public void onProviderEnabled(String p){} @Override public void onProviderDisabled(String p){} @Override public void onStatusChanged(String p,int s,Bundle e){}
-    @Override protected void onResume(){super.onResume();if(map!=null)map.onResume();} @Override protected void onPause(){if(map!=null)map.onPause();if(tts!=null)tts.stop();super.onPause();} @Override protected void onDestroy(){if(tts!=null)tts.shutdown();super.onDestroy();}
+    @Override protected void onResume(){super.onResume();if(map!=null){updateOfflineMapMode();map.onResume();}} @Override protected void onPause(){if(map!=null)map.onPause();if(tts!=null)tts.stop();super.onPause();} @Override protected void onDestroy(){if(tts!=null)tts.shutdown();super.onDestroy();}
 }
