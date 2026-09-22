@@ -23,6 +23,9 @@ import java.net.URLEncoder;
 import java.util.*;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
+import org.osmdroid.tileprovider.OfflineTileProvider;
+import org.osmdroid.tileprovider.util.SimpleRegisterReceiver;
+import org.osmdroid.tileprovider.ArchiveFileFactory;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polyline;
@@ -33,7 +36,7 @@ public class MainActivity extends Activity implements LocationListener {
     private boolean nav=false; private float touchDownX,touchDownY; private GeoPoint destination; private Marker marker; private Polyline routeLine;
     private TextView status; private long lastVoice=0; private android.content.SharedPreferences navPrefs; private Location lastLocation; private Handler mainHandler=new Handler(); private boolean routeRequestRunning=false; private int currentStepIndex=0; private double lastStepDistance=Double.MAX_VALUE; private java.util.List<GeoPoint> roadRoute=new java.util.ArrayList<>(); private int nextRoutePoint=0; private JSONArray routeSteps; private double routeMeters=0;
     private final ArrayList<SearchResult> searchResults=new ArrayList<>();
-    private boolean offlineMode=false;
+    private boolean offlineMode=false; private boolean offlineArchiveLoaded=false;
 
     private static class SearchResult {
         String name,address; double lat,lon;
@@ -58,7 +61,7 @@ public class MainActivity extends Activity implements LocationListener {
 
         status=new TextView(this); status.setText("🗺️  Нажмите на место, чтобы построить маршрут"); status.setTextColor(Color.WHITE); status.setTextSize(14); status.setGravity(Gravity.CENTER_VERTICAL); status.setPadding(18,0,18,0); status.setBackground(roundBg(0xE9152230,18)); FrameLayout.LayoutParams statusLp=new FrameLayout.LayoutParams(-1,58,Gravity.BOTTOM); statusLp.setMargins(14,0,14,76); root.addView(status,statusLp);
 
-        LinearLayout bottom=new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(6,5,6,5); bottom.setBackground(roundBg(0xF30B1622,18)); String[] tabs={"▣\nКарта","➤\nНавигатор","☆\nЗакладки","☰\nЕщё"}; for(String label:tabs){TextView t=new TextView(this);t.setText(label);t.setTextColor(Color.LTGRAY);t.setTextSize(12);t.setGravity(Gravity.CENTER);bottom.addView(t,new LinearLayout.LayoutParams(0,62,1));} ((TextView)bottom.getChildAt(0)).setTextColor(0xFF18A8FF); FrameLayout.LayoutParams bottomLp=new FrameLayout.LayoutParams(-1,68,Gravity.BOTTOM); bottomLp.setMargins(10,0,10,6); root.addView(bottom,bottomLp);
+        LinearLayout bottom=new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(6,5,6,5); bottom.setBackground(roundBg(0xF30B1622,18)); String[] tabs={"▣\nКарта","➤\nНавигатор","☆\nЗакладки","☰\nЕщё"}; for(String label:tabs){TextView t=new TextView(this);t.setText(label);t.setTextColor(Color.LTGRAY);t.setTextSize(12);t.setGravity(Gravity.CENTER);bottom.addView(t,new LinearLayout.LayoutParams(0,62,1));} ((TextView)bottom.getChildAt(0)).setTextColor(0xFF18A8FF); ((TextView)bottom.getChildAt(3)).setOnClickListener(v->openOfflineManager()); FrameLayout.LayoutParams bottomLp=new FrameLayout.LayoutParams(-1,68,Gravity.BOTTOM); bottomLp.setMargins(10,0,10,6); root.addView(bottom,bottomLp);
 
         setContentView(root); navPrefs=getSharedPreferences("maps_navigation",MODE_PRIVATE); loadCachedRoute();
         tts=new TextToSpeech(this,s->{if(s==TextToSpeech.SUCCESS)tts.setLanguage(new Locale("ru","RU"));});
@@ -135,7 +138,65 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void updateOfflineMapMode(){
         offlineMode=!isOnline();
-        if(map!=null)map.setUseDataConnection(!offlineMode);
+        if(map!=null){
+            if(offlineMode){
+                offlineArchiveLoaded=loadOfflineMapArchive();
+                map.setUseDataConnection(false);
+                if(offlineArchiveLoaded) status.setText("📴 Офлайн-карта загружена • интернет не нужен");
+                else status.setText("📴 Офлайн-режим • карта работает из кэша/архива");
+            }else{
+                map.setUseDataConnection(true);
+            }
+        }
+    }
+
+    private boolean loadOfflineMapArchive(){
+        try{
+            java.io.File base=Configuration.getInstance().getOsmdroidBasePath();
+            if(base==null)return false;
+            if(!base.exists())base.mkdirs();
+            java.io.File[] files=base.listFiles();
+            if(files==null)return false;
+            java.util.ArrayList<java.io.File> archives=new java.util.ArrayList<>();
+            for(java.io.File f:files){
+                if(!f.isFile())continue;
+                String n=f.getName().toLowerCase(Locale.US);
+                int dot=n.lastIndexOf('.');
+                if(dot<0)continue;
+                String ext=n.substring(dot+1);
+                if(ArchiveFileFactory.isFileExtensionRegistered(ext))archives.add(f);
+            }
+            if(archives.isEmpty())return false;
+            OfflineTileProvider provider=new OfflineTileProvider(new SimpleRegisterReceiver(this),archives.toArray(new java.io.File[0]));
+            map.setTileProvider(provider);
+            map.setTileSource(TileSourceFactory.MAPNIK);
+            map.setUseDataConnection(false);
+            map.invalidate();
+            return true;
+        }catch(Exception e){
+            offlineArchiveLoaded=false;
+            return false;
+        }
+    }
+
+    private void openOfflineManager(){
+        java.io.File base=Configuration.getInstance().getOsmdroidBasePath();
+        String path=base==null?"неизвестно":base.getAbsolutePath();
+        String message;
+        if(offlineArchiveLoaded){
+            message="✅ Офлайн-карта найдена.\\n\\nПапка: "+path+"\\n\\nКарта может отображаться без интернета.";
+        }else{
+            message="📦 Офлайн-карта пока не установлена.\\n\\nПоложите поддерживаемый архив (.sqlite, .zip, .mbtiles или .gemf) в папку osmdroid, затем перезапустите приложение.\\n\\nПапка: "+path;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("🗺️ Офлайн-карты")
+            .setMessage(message)
+            .setPositiveButton("Проверить", (d,w)->{
+                offlineArchiveLoaded=loadOfflineMapArchive();
+                status.setText(offlineArchiveLoaded?"✅ Офлайн-карта подключена":"⚠️ Офлайн-архив не найден");
+            })
+            .setNegativeButton("Закрыть",null)
+            .show();
     }
 
     private void saveCachedRoute(java.util.List<GeoPoint> pts, JSONArray steps, double meters, GeoPoint destinationPoint){
