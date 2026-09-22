@@ -59,7 +59,7 @@ public class MainActivity extends Activity implements LocationListener {
         plus.setOnClickListener(v->map.getController().zoomIn()); minus.setOnClickListener(v->map.getController().zoomOut()); locate.setOnClickListener(v->{if(lastLocation!=null)map.getController().animateTo(new GeoPoint(lastLocation.getLatitude(),lastLocation.getLongitude()));});
         FrameLayout.LayoutParams ctlLp=new FrameLayout.LayoutParams(60,170,Gravity.RIGHT|Gravity.CENTER_VERTICAL); ctlLp.setMargins(0,0,10,0); root.addView(controls,ctlLp);
 
-        status=new TextView(this); status.setText("🗺️  Нажмите на место, чтобы построить маршрут"); status.setTextColor(Color.WHITE); status.setTextSize(14); status.setGravity(Gravity.CENTER_VERTICAL); status.setPadding(18,0,18,0); status.setBackground(roundBg(0xE9152230,18)); FrameLayout.LayoutParams statusLp=new FrameLayout.LayoutParams(-1,58,Gravity.BOTTOM); statusLp.setMargins(14,0,14,76); root.addView(status,statusLp);
+        status=new TextView(this); status.setText("🗺️  Нажмите на место, чтобы построить маршрут"); status.setTextColor(Color.WHITE); status.setTextSize(14); status.setGravity(Gravity.CENTER_VERTICAL); status.setPadding(18,0,18,0); status.setBackground(roundBg(0xE9152230,18)); TextView attribution=new TextView(this); attribution.setText("© OpenStreetMap contributors"); attribution.setTextColor(Color.LTGRAY); attribution.setTextSize(10); attribution.setGravity(Gravity.RIGHT); attribution.setPadding(4,0,4,0); FrameLayout.LayoutParams attrLp=new FrameLayout.LayoutParams(-2,28,Gravity.RIGHT|Gravity.BOTTOM); attrLp.setMargins(0,0,16,78); root.addView(attribution,attrLp); FrameLayout.LayoutParams statusLp=new FrameLayout.LayoutParams(-1,58,Gravity.BOTTOM); statusLp.setMargins(14,0,14,76); root.addView(status,statusLp);
 
         LinearLayout bottom=new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(6,5,6,5); bottom.setBackground(roundBg(0xF30B1622,18)); String[] tabs={"▣\nКарта","➤\nНавигатор","☆\nЗакладки","☰\nЕщё"}; for(String label:tabs){TextView t=new TextView(this);t.setText(label);t.setTextColor(Color.LTGRAY);t.setTextSize(12);t.setGravity(Gravity.CENTER);bottom.addView(t,new LinearLayout.LayoutParams(0,62,1));} ((TextView)bottom.getChildAt(0)).setTextColor(0xFF18A8FF); ((TextView)bottom.getChildAt(3)).setOnClickListener(v->openOfflineManager()); FrameLayout.LayoutParams bottomLp=new FrameLayout.LayoutParams(-1,68,Gravity.BOTTOM); bottomLp.setMargins(10,0,10,6); root.addView(bottom,bottomLp);
 
@@ -79,7 +79,7 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void searchPlaces(String query){
-        if(!isOnline()){status.setText("📴 Поиск адресов недоступен без интернета. Сохранённый маршрут работает офлайн.");return;}
+        if(!isOnline()){ if(searchCachedPlaces(query)){return;} status.setText("📴 В офлайн-базе нет такого места."); return;}
         status.setText("🔎 Ищем: "+query);
         new Thread(()->{
             try{
@@ -94,9 +94,37 @@ public class MainActivity extends Activity implements LocationListener {
                 StringBuilder sb=new StringBuilder();String line;while((line=br.readLine())!=null)sb.append(line);br.close();
                 JSONArray arr=new JSONArray(sb.toString()); searchResults.clear();
                 for(int i=0;i<arr.length();i++){JSONObject o=arr.getJSONObject(i);String name=o.optString("name","Без названия");String display=o.optString("display_name","");double lat=o.getDouble("lat"),lon=o.getDouble("lon");searchResults.add(new SearchResult(name,display,lat,lon));}
-                mainHandler.post(()->showSearchResults(query));
+                cacheSearchResults(query, searchResults); mainHandler.post(()->showSearchResults(query));
             }catch(Exception e){mainHandler.post(()->status.setText("⚠️ Поиск не удался. Проверьте интернет."));}
         }).start();
+    }
+
+    private void cacheSearchResults(String query, java.util.List<SearchResult> results){
+        try{
+            JSONArray all=new JSONArray(navPrefs.getString("cached_searches","[]"));
+            JSONObject entry=new JSONObject(); entry.put("query",query); JSONArray arr=new JSONArray();
+            for(SearchResult r:results){JSONObject o=new JSONObject();o.put("name",r.name);o.put("address",r.address);o.put("lat",r.lat);o.put("lon",r.lon);arr.put(o);}
+            entry.put("results",arr); all.put(entry);
+            while(all.length()>20)all.remove(0);
+            navPrefs.edit().putString("cached_searches",all.toString()).apply();
+        }catch(Exception ignored){}
+    }
+
+    private boolean searchCachedPlaces(String query){
+        try{
+            JSONArray all=new JSONArray(navPrefs.getString("cached_searches","[]"));
+            String q=query.trim().toLowerCase(Locale.ROOT);
+            searchResults.clear();
+            for(int i=all.length()-1;i>=0;i--){
+                JSONObject e=all.getJSONObject(i);
+                String saved=e.optString("query","").toLowerCase(Locale.ROOT);
+                if(!saved.contains(q)&&!q.contains(saved))continue;
+                JSONArray arr=e.getJSONArray("results");
+                for(int j=0;j<arr.length();j++){JSONObject o=arr.getJSONObject(j);searchResults.add(new SearchResult(o.optString("name","Без названия"),o.optString("address",""),o.getDouble("lat"),o.getDouble("lon")));}
+                if(!searchResults.isEmpty()){showSearchResults("📴 "+query);return true;}
+            }
+        }catch(Exception ignored){}
+        return false;
     }
 
     private void showSearchResults(String query){
@@ -186,7 +214,7 @@ public class MainActivity extends Activity implements LocationListener {
         if(offlineArchiveLoaded){
             message="✅ Офлайн-карта найдена.\\n\\nПапка: "+path+"\\n\\nКарта может отображаться без интернета.";
         }else{
-            message="📦 Офлайн-карта пока не установлена.\\n\\nПоложите поддерживаемый архив (.sqlite, .zip, .mbtiles или .gemf) в папку osmdroid, затем перезапустите приложение.\\n\\nПапка: "+path;
+            message="📦 Офлайн-карта пока не установлена.\\n\\nПоддерживаемые архивы: .sqlite, .zip, .mbtiles, .gemf.\\n\\nТакже сохранённые маршруты и результаты поиска доступны без сети.\\n\\nПапка: "+path;
         }
         new AlertDialog.Builder(this)
             .setTitle("🗺️ Офлайн-карты")
@@ -194,6 +222,10 @@ public class MainActivity extends Activity implements LocationListener {
             .setPositiveButton("Проверить", (d,w)->{
                 offlineArchiveLoaded=loadOfflineMapArchive();
                 status.setText(offlineArchiveLoaded?"✅ Офлайн-карта подключена":"⚠️ Офлайн-архив не найден");
+            })
+            .setNeutralButton("Очистить кэш", (d,w)->{
+                navPrefs.edit().remove("cached_searches").remove("cached_route_points").remove("cached_route_steps").apply();
+                status.setText("🧹 Кэш маршрутов и поиска очищен");
             })
             .setNegativeButton("Закрыть",null)
             .show();
