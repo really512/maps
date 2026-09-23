@@ -7,7 +7,7 @@ import androidx.car.app.Screen;
 import androidx.car.app.model.Action;
 import androidx.car.app.model.ActionStrip;
 import androidx.car.app.model.Distance;
-import java.time.Duration;
+import androidx.car.app.model.Duration;
 import androidx.car.app.model.Template;
 import androidx.car.app.navigation.model.NavigationTemplate;
 import androidx.car.app.navigation.model.RoutingInfo;
@@ -49,7 +49,7 @@ public class MapsCarScreen extends Screen {
             Distance destinationDistance = Distance.create(Math.max(0d, destinationMeters), Distance.UNIT_METERS);
 
             TravelEstimate estimate = new TravelEstimate.Builder(
-                    destinationDistance, Duration.create(0, Duration.UNIT_MINUTES)).build();
+                    destinationDistance, Duration.create(0, Duration.UNIT_MILLIS)).build();
 
             Step step = new Step.Builder(instruction).build();
             builder.setNavigationInfo(new RoutingInfo.Builder()
