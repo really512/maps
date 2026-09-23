@@ -45,7 +45,7 @@ public class MainActivity extends Activity implements LocationListener {
     @Override public void onCreate(Bundle b){super.onCreate(b);
         Configuration.getInstance().load(this,getSharedPreferences("maps",0)); Configuration.getInstance().setUserAgentValue(getPackageName());
         FrameLayout root=new FrameLayout(this);
-        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); updateOfflineMapMode(); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20.0,0.0)); root.addView(map,new FrameLayout.LayoutParams(-1,-1));
+        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); updateOfflineMapMode(); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(Double.valueOf(20.0), Double.valueOf(0.0))); root.addView(map,new FrameLayout.LayoutParams(-1,-1));
 
         LinearLayout top=new LinearLayout(this); top.setPadding(18,18,18,0); top.setGravity(Gravity.CENTER_VERTICAL);
         TextView search=new TextView(this); search.setText("⌕   Поиск мест и адресов                 🎙"); search.setTextColor(Color.WHITE); search.setTextSize(15); search.setGravity(Gravity.CENTER_VERTICAL); search.setPadding(18,0,14,0); search.setBackground(roundBg(0xE91A2A3A,22)); top.addView(search,new LinearLayout.LayoutParams(-1,56));
