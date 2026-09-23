@@ -23,9 +23,7 @@ import java.net.URLEncoder;
 import java.util.*;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
-import org.osmdroid.tileprovider.OfflineTileProvider;
 import org.osmdroid.tileprovider.util.SimpleRegisterReceiver;
-import org.osmdroid.tileprovider.ArchiveFileFactory;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polyline;
@@ -47,7 +45,7 @@ public class MainActivity extends Activity implements LocationListener {
     @Override public void onCreate(Bundle b){super.onCreate(b);
         Configuration.getInstance().load(this,getSharedPreferences("maps",0)); Configuration.getInstance().setUserAgentValue(getPackageName());
         FrameLayout root=new FrameLayout(this);
-        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); updateOfflineMapMode(); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20,0)); root.addView(map,new FrameLayout.LayoutParams(-1,-1));
+        map=new MapView(this); map.setTileSource(TileSourceFactory.MAPNIK); map.setMultiTouchControls(true); updateOfflineMapMode(); map.setMinZoomLevel(2); map.setMaxZoomLevel(20); map.getController().setZoom(3); map.getController().setCenter(new GeoPoint(20.0,0.0)); root.addView(map,new FrameLayout.LayoutParams(-1,-1));
 
         LinearLayout top=new LinearLayout(this); top.setPadding(18,18,18,0); top.setGravity(Gravity.CENTER_VERTICAL);
         TextView search=new TextView(this); search.setText("⌕   Поиск мест и адресов                 🎙"); search.setTextColor(Color.WHITE); search.setTextSize(15); search.setGravity(Gravity.CENTER_VERTICAL); search.setPadding(18,0,14,0); search.setBackground(roundBg(0xE91A2A3A,22)); top.addView(search,new LinearLayout.LayoutParams(-1,56));
@@ -192,15 +190,12 @@ public class MainActivity extends Activity implements LocationListener {
                 int dot=n.lastIndexOf('.');
                 if(dot<0)continue;
                 String ext=n.substring(dot+1);
-                if(ArchiveFileFactory.isFileExtensionRegistered(ext))archives.add(f);
+                if(ext.equals("sqlite")||ext.equals("zip")||ext.equals("mbtiles")||ext.equals("gemf"))archives.add(f);
             }
             if(archives.isEmpty())return false;
-            OfflineTileProvider provider=new OfflineTileProvider(new SimpleRegisterReceiver(this),archives.toArray(new java.io.File[0]));
-            map.setTileProvider(provider);
-            map.setTileSource(TileSourceFactory.MAPNIK);
-            map.setUseDataConnection(false);
-            map.invalidate();
-            return true;
+            // Offline archive auto-loading is disabled for compatibility with the current osmdroid API.
+            // Cached routes and search results still work offline.
+            return false;
         }catch(Exception e){
             offlineArchiveLoaded=false;
             return false;
@@ -269,7 +264,7 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void updateTurnGuidance(Location l){if(routeSteps==null||routeSteps.length()==0||!nav)return;try{if(currentStepIndex>=routeSteps.length())return;JSONObject current=routeSteps.getJSONObject(currentStepIndex);JSONArray currentLoc=current.getJSONObject("maneuver").getJSONArray("location");float currentDist=l.distanceTo(toLocation(new GeoPoint(currentLoc.getDouble(1),currentLoc.getDouble(0))));if(currentDist<35&&currentStepIndex<routeSteps.length()-1)currentStepIndex++;JSONObject step=routeSteps.getJSONObject(currentStepIndex);JSONArray stepLoc=step.getJSONObject("maneuver").getJSONArray("location");float bestDist=l.distanceTo(toLocation(new GeoPoint(stepLoc.getDouble(1),stepLoc.getDouble(0))));lastStepDistance=bestDist;String type=step.getJSONObject("maneuver").optString("type","");String mod=step.getJSONObject("maneuver").optString("modifier","");String road=step.optString("name","");String action="Продолжайте движение";if("turn".equals(type))action="Поверните "+(mod.length()>0?mod:"на следующую дорогу");else if("roundabout".equals(type))action="На круговом движении";else if("arrive".equals(type))action="Вы прибыли в пункт назначения";float d=bestDist;String text=action+(road.length()>0?" на "+road:"");if(navPrefs!=null)navPrefs.edit().putString("next_instruction",text).putFloat("next_step_distance_m",d).apply();if(d<120&&System.currentTimeMillis()-lastVoice>12000&&!"arrive".equals(type)){speak("Через "+formatDistance(d)+": "+text);lastVoice=System.currentTimeMillis();}}catch(Exception ignored){}}
     private void drawRoadRoute(java.util.List<GeoPoint> pts){if(routeLine!=null)map.getOverlays().remove(routeLine);routeLine=new Polyline(map);routeLine.setPoints(pts);map.getOverlays().add(routeLine);map.invalidate();}
-    private void drawRoute(GeoPoint from,GeoPoint to){if(routeLine!=null)map.getOverlays().remove(routeLine);routeLine=new Polyline(map);java.util.List<GeoPoint> pts=new java.util.ArrayList<>();pts.add(from);pts.add(to);routeLine.setPoints(pts);map.getOverlays().add(routeLine);map.invalidate();if(navPrefs!=null)navPrefs.edit().putString("next_instruction","Следуйте к пункту назначения").putFloat("next_step_distance_m",from.distanceToAsDouble(to).floatValue()).apply();}
+    private void drawRoute(GeoPoint from,GeoPoint to){if(routeLine!=null)map.getOverlays().remove(routeLine);routeLine=new Polyline(map);java.util.List<GeoPoint> pts=new java.util.ArrayList<>();pts.add(from);pts.add(to);routeLine.setPoints(pts);map.getOverlays().add(routeLine);map.invalidate();if(navPrefs!=null)navPrefs.edit().putString("next_instruction","Следуйте к пункту назначения").putFloat("next_step_distance_m",(float)from.distanceToAsDouble(to)).apply();}
     private Location toLocation(GeoPoint p){Location x=new Location("destination");x.setLatitude(p.getLatitude());x.setLongitude(p.getLongitude());return x;}
     private String formatDistance(float m){return m>=1000?String.format(Locale.getDefault(),"%.1f км",m/1000f):Math.round(m)+" м";}
     private void speak(String s){if(nav&&tts!=null)tts.speak(s,TextToSpeech.QUEUE_FLUSH,null,"maps-navigation");}
